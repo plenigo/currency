@@ -1,4 +1,4 @@
-module github.com/bojanz/currency
+module github.com/plenigo/currency
 
 go 1.14
 
