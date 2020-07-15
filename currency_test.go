@@ -6,7 +6,7 @@ package currency_test
 import (
 	"testing"
 
-	"github.com/bojanz/currency"
+	"github.com/plenigo/currency"
 )
 
 func TestGetCurrencyCodes(t *testing.T) {
