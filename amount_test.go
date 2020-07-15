@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/bojanz/currency"
+	"github.com/plenigo/currency"
 )
 
 func TestNewAmount(t *testing.T) {
