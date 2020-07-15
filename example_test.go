@@ -6,7 +6,7 @@ package currency_test
 import (
 	"fmt"
 
-	"github.com/bojanz/currency"
+	"github.com/plenigo/currency"
 )
 
 func ExampleNewAmount() {
