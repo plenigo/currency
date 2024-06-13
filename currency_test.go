@@ -9,6 +9,30 @@ import (
 	"github.com/plenigo/currency"
 )
 
+func TestForCountryCode(t *testing.T) {
+	tests := []struct {
+		countryCode      string
+		wantCurrencyCode string
+		wantOK           bool
+	}{
+		{"FR", "EUR", true},
+		{"RS", "RSD", true},
+		{"XX", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run("", func(t *testing.T) {
+			gotCurrencyCode, gotOK := currency.ForCountryCode(tt.countryCode)
+			if gotOK != tt.wantOK {
+				t.Errorf("got %v, want %v", gotOK, tt.wantOK)
+			}
+			if gotCurrencyCode != tt.wantCurrencyCode {
+				t.Errorf("got %q, want %q", gotCurrencyCode, tt.wantCurrencyCode)
+			}
+		})
+	}
+}
+
 func TestGetCurrencyCodes(t *testing.T) {
 	currencyCodes := currency.GetCurrencyCodes()
 	var got [10]string
@@ -25,6 +49,7 @@ func TestIsValid(t *testing.T) {
 		currencyCode string
 		want         bool
 	}{
+		{"", true},
 		{"INVALID", false},
 		{"XXX", false},
 		{"usd", false},
@@ -95,6 +120,8 @@ func TestGetSymbol(t *testing.T) {
 		{"USD", currency.NewLocale("en-AU"), "US$", true},
 		{"USD", currency.NewLocale("es"), "US$", true},
 		{"USD", currency.NewLocale("es-ES"), "US$", true},
+		// An empty locale should use "en" data.
+		{"USD", currency.NewLocale(""), "$", true},
 	}
 
 	for _, tt := range tests {

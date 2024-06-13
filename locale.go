@@ -3,19 +3,23 @@
 
 package currency
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 // Locale represents a Unicode locale identifier.
 type Locale struct {
-	Language string
-	Script   string
-	Region   string
+	Language  string
+	Script    string
+	Territory string
 }
 
 // NewLocale creates a new Locale from its string representation.
 func NewLocale(id string) Locale {
 	// Normalize the ID ("SR_rs_LATN" => "sr-Latn-RS").
-	id = strings.ToLower(id)
+	id = strings.ToLower(strings.TrimSpace(id))
 	id = strings.ReplaceAll(id, "_", "-")
 	locale := Locale{}
 	for i, part := range strings.Split(id, "-") {
@@ -25,11 +29,13 @@ func NewLocale(id string) Locale {
 		}
 		partLen := len(part)
 		if partLen == 4 {
-			locale.Script = strings.Title(part)
+			// Uppercase the first letter in a UTF8-safe manner.
+			r, size := utf8.DecodeRuneInString(part)
+			locale.Script = string(unicode.ToTitle(r)) + part[size:]
 			continue
 		}
 		if partLen == 2 || partLen == 3 {
-			locale.Region = strings.ToUpper(part)
+			locale.Territory = strings.ToUpper(part)
 			continue
 		}
 	}
@@ -45,27 +51,38 @@ func (l Locale) String() string {
 		b.WriteString("-")
 		b.WriteString(l.Script)
 	}
-	if l.Region != "" {
+	if l.Territory != "" {
 		b.WriteString("-")
-		b.WriteString(l.Region)
+		b.WriteString(l.Territory)
 	}
 
 	return b.String()
 }
 
+// MarshalText implements the encoding.TextMarshaler interface.
+func (l Locale) MarshalText() ([]byte, error) {
+	return []byte(l.String()), nil
+}
+
+// UnmarshalText implements the encoding.TextUnmarshaler interface.
+func (l *Locale) UnmarshalText(b []byte) error {
+	*l = NewLocale(string(b))
+	return nil
+}
+
 // IsEmpty returns whether l is empty.
 func (l Locale) IsEmpty() bool {
-	return l.Language == "" && l.Script == "" && l.Region == ""
+	return l.Language == "" && l.Script == "" && l.Territory == ""
 }
 
 // GetParent returns the parent locale for l.
 //
 //	Order:
-// 	1. Language - Script - Region (e.g. "sr-Cyrl-RS")
-// 	2. Language - Script (e.g. "sr-Cyrl")
-// 	3. Language (e.g. "sr")
-// 	4. English ("en")
-// 	5. Empty locale ("")
+//	1. Language - Script - Territory (e.g. "sr-Cyrl-RS")
+//	2. Language - Script (e.g. "sr-Cyrl")
+//	3. Language (e.g. "sr")
+//	4. English ("en")
+//	5. Empty locale ("")
 //
 // Note that according to CLDR rules, certain locales have special parents.
 // For example, the parent for "es-AR" is "es-419", and for "sr-Latn" it is "en".
@@ -78,7 +95,7 @@ func (l Locale) GetParent() Locale {
 		return NewLocale(p)
 	}
 
-	if l.Region != "" {
+	if l.Territory != "" {
 		return Locale{Language: l.Language, Script: l.Script}
 	} else if l.Script != "" {
 		return Locale{Language: l.Language}

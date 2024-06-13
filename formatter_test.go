@@ -10,26 +10,11 @@ import (
 )
 
 func TestFormatter_Locale(t *testing.T) {
-	tests := []struct {
-		localeID string
-		want     string
-	}{
-		{"de-CH", "de-CH"},
-		// Fallback due to lack of format data.
-		{"fr-FR", "fr"},
-		// Fallback due to package rules.
-		{"en-US", "en"},
-	}
-
-	for _, tt := range tests {
-		t.Run("", func(t *testing.T) {
-			locale := currency.NewLocale(tt.localeID)
-			formatter := currency.NewFormatter(locale)
-			got := formatter.Locale().String()
-			if got != tt.want {
-				t.Errorf("got %v, want %v", got, tt.want)
-			}
-		})
+	locale := currency.NewLocale("fr-FR")
+	formatter := currency.NewFormatter(locale)
+	got := formatter.Locale().String()
+	if got != "fr-FR" {
+		t.Errorf("got %v, want fr-FR", got)
 	}
 }
 
@@ -40,34 +25,38 @@ func TestFormatter_Format(t *testing.T) {
 		localeID     string
 		want         string
 	}{
-		{"1234.59", "USD", "en", "$1,234.59"},
-		{"1234.59", "USD", "de-AT", "US$\u00a01.234,59"},
-		{"1234.59", "USD", "de-CH", "US$\u00a01’234.59"},
+		{"1234.59", "USD", "en-US", "$1,234.59"},
+		{"1234.59", "USD", "en-CA", "US$1,234.59"},
+		{"1234.59", "USD", "de-CH", "$\u00a01’234.59"},
+		{"1234.59", "USD", "sr", "1.234,59\u00a0US$"},
 
-		{"-1234.59", "USD", "en", "-$1,234.59"},
-		{"-1234.59", "USD", "de-AT", "-US$\u00a01.234,59"},
-		{"-1234.59", "USD", "de-CH", "US$-1’234.59"},
+		{"-1234.59", "USD", "en-US", "-$1,234.59"},
+		{"-1234.59", "USD", "en-CA", "-US$1,234.59"},
+		{"-1234.59", "USD", "de-CH", "$-1’234.59"},
+		{"-1234.59", "USD", "sr", "-1.234,59\u00a0US$"},
 
 		{"1234.00", "EUR", "en", "€1,234.00"},
-		{"1234.00", "EUR", "de-AT", "€\u00a01.234,00"},
 		{"1234.00", "EUR", "de-CH", "€\u00a01’234.00"},
+		{"1234.00", "EUR", "sr", "1.234,00\u00a0€"},
 
 		{"1234.00", "CHF", "en", "CHF\u00a01,234.00"},
-		{"1234.00", "CHF", "de-AT", "CHF\u00a01.234,00"},
 		{"1234.00", "CHF", "de-CH", "CHF\u00a01’234.00"},
+		{"1234.00", "CHF", "sr", "1.234,00\u00a0CHF"},
+
+		// An empty locale should be equivalent to "en".
+		{"1234.59", "USD", "", "$1,234.59"},
+		{"-1234.59", "USD", "", "-$1,234.59"},
 
 		// Arabic digits.
-		{"12345678.90", "USD", "ar", "١٢٬٣٤٥٬٦٧٨٫٩٠\u00a0US$"},
+		{"12345678.90", "USD", "ar", "\u200f١٢٬٣٤٥٬٦٧٨٫٩٠\u00a0US$"},
 		// Arabic extended (Persian) digits.
-		{"12345678.90", "USD", "fa", "\u200eUS$۱۲٬۳۴۵٬۶۷۸٫۹۰"},
+		{"12345678.90", "USD", "fa", "\u200e$۱۲٬۳۴۵٬۶۷۸٫۹۰"},
 		// Bengali digits.
 		{"12345678.90", "USD", "bn", "১,২৩,৪৫,৬৭৮.৯০\u00a0US$"},
 		// Devanagari digits.
 		{"12345678.90", "USD", "ne", "US$\u00a0१,२३,४५,६७८.९०"},
 		// Myanmar (Burmese) digits.
 		{"12345678.90", "USD", "my", "၁၂,၃၄၅,၆၇၈.၉၀\u00a0US$"},
-		// Tibetan digits.
-		{"12345678.90", "USD", "dz", "US$༡,༢༣,༤༥,༦༧༨.༩༠"},
 	}
 
 	for _, tt := range tests {
@@ -75,6 +64,72 @@ func TestFormatter_Format(t *testing.T) {
 			amount, _ := currency.NewAmount(tt.number, tt.currencyCode)
 			locale := currency.NewLocale(tt.localeID)
 			formatter := currency.NewFormatter(locale)
+			got := formatter.Format(amount)
+			if got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatter_AccountingStyle(t *testing.T) {
+	tests := []struct {
+		number       string
+		currencyCode string
+		localeID     string
+		AddPlusSign  bool
+		want         string
+	}{
+		// Locale with an accounting pattern.
+		{"1234.59", "USD", "en", false, "$1,234.59"},
+		{"-1234.59", "USD", "en", false, "($1,234.59)"},
+		{"1234.59", "USD", "en", true, "+$1,234.59"},
+
+		// Locale without an accounting pattern.
+		{"1234.59", "EUR", "es", false, "1234,59 €"},
+		{"-1234.59", "EUR", "es", false, "-1234,59 €"},
+		{"1234.59", "EUR", "es", true, "+1234,59 €"},
+	}
+
+	for _, tt := range tests {
+		t.Run("", func(t *testing.T) {
+			amount, _ := currency.NewAmount(tt.number, tt.currencyCode)
+			locale := currency.NewLocale(tt.localeID)
+			formatter := currency.NewFormatter(locale)
+			formatter.AccountingStyle = true
+			formatter.AddPlusSign = tt.AddPlusSign
+			got := formatter.Format(amount)
+			if got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatter_PlusSign(t *testing.T) {
+	tests := []struct {
+		number       string
+		currencyCode string
+		localeID     string
+		AddPlusSign  bool
+		want         string
+	}{
+		{"123.99", "USD", "en", false, "$123.99"},
+		{"123.99", "USD", "en", true, "+$123.99"},
+
+		{"123.99", "USD", "de-CH", false, "$\u00a0123.99"},
+		{"123.99", "USD", "de-CH", true, "$+123.99"},
+
+		{"123.99", "USD", "fr-FR", false, "123,99\u00a0$US"},
+		{"123.99", "USD", "fr-FR", true, "+123,99\u00a0$US"},
+	}
+
+	for _, tt := range tests {
+		t.Run("", func(t *testing.T) {
+			amount, _ := currency.NewAmount(tt.number, tt.currencyCode)
+			locale := currency.NewLocale(tt.localeID)
+			formatter := currency.NewFormatter(locale)
+			formatter.AddPlusSign = tt.AddPlusSign
 			got := formatter.Format(amount)
 			if got != tt.want {
 				t.Errorf("got %v, want %v", got, tt.want)
@@ -106,15 +161,10 @@ func TestFormatter_Grouping(t *testing.T) {
 		{"1234567.99", "USD", "es", false, "1.234.567,99\u00a0US$"},
 
 		// The "hi" locale has a different secondaryGroupingSize.
-		{"123.99", "USD", "hi", false, "US$123.99"},
-		{"1234.99", "USD", "hi", false, "US$1,234.99"},
-		{"1234567.99", "USD", "hi", false, "US$12,34,567.99"},
-		{"12345678.99", "USD", "hi", false, "US$1,23,45,678.99"},
-
-		// The "bg" locale doesn't support grouping.
-		{"123.99", "EUR", "bg", false, "123,99\u00a0€"},
-		{"1234.99", "EUR", "bg", false, "1234,99\u00a0€"},
-		{"1234567.99", "EUR", "bg", false, "1234567,99\u00a0€"},
+		{"123.99", "USD", "hi", false, "$123.99"},
+		{"1234.99", "USD", "hi", false, "$1,234.99"},
+		{"1234567.99", "USD", "hi", false, "$12,34,567.99"},
+		{"12345678.99", "USD", "hi", false, "$1,23,45,678.99"},
 	}
 
 	for _, tt := range tests {
@@ -123,38 +173,6 @@ func TestFormatter_Grouping(t *testing.T) {
 			locale := currency.NewLocale(tt.localeID)
 			formatter := currency.NewFormatter(locale)
 			formatter.NoGrouping = tt.NoGrouping
-			got := formatter.Format(amount)
-			if got != tt.want {
-				t.Errorf("got %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestFormatter_PlusSign(t *testing.T) {
-	tests := []struct {
-		number       string
-		currencyCode string
-		localeID     string
-		AddPlusSign  bool
-		want         string
-	}{
-		{"123.99", "USD", "en", false, "$123.99"},
-		{"123.99", "USD", "en", true, "+$123.99"},
-
-		{"123.99", "USD", "de-CH", false, "US$\u00a0123.99"},
-		{"123.99", "USD", "de-CH", true, "US$+123.99"},
-
-		{"123.99", "USD", "fr-FR", false, "123,99\u00a0$US"},
-		{"123.99", "USD", "fr-FR", true, "+123,99\u00a0$US"},
-	}
-
-	for _, tt := range tests {
-		t.Run("", func(t *testing.T) {
-			amount, _ := currency.NewAmount(tt.number, tt.currencyCode)
-			locale := currency.NewLocale(tt.localeID)
-			formatter := currency.NewFormatter(locale)
-			formatter.AddPlusSign = tt.AddPlusSign
 			got := formatter.Format(amount)
 			if got != tt.want {
 				t.Errorf("got %v, want %v", got, tt.want)
@@ -262,13 +280,19 @@ func TestFormatter_CurrencyDisplay(t *testing.T) {
 		{"1234.59", "USD", "en", currency.DisplayCode, "USD\u00a01,234.59"},
 		{"1234.59", "USD", "en", currency.DisplayNone, "1,234.59"},
 
-		{"1234.59", "USD", "de-AT", currency.DisplaySymbol, "US$\u00a01.234,59"},
+		{"1234.59", "USD", "de-AT", currency.DisplaySymbol, "$\u00a01.234,59"},
 		{"1234.59", "USD", "de-AT", currency.DisplayCode, "USD\u00a01.234,59"},
 		{"1234.59", "USD", "de-AT", currency.DisplayNone, "1.234,59"},
 
 		{"1234.59", "USD", "sr-Latn", currency.DisplaySymbol, "1.234,59\u00a0US$"},
 		{"1234.59", "USD", "sr-Latn", currency.DisplayCode, "1.234,59\u00a0USD"},
 		{"1234.59", "USD", "sr-Latn", currency.DisplayNone, "1.234,59"},
+
+		// Confirm that any extra spacing around the currency is stripped
+		// even when the negative amount is formatted with the accounting style.
+		{"-1234.59", "USD", "en", currency.DisplayNone, "(1,234.59)"},
+		{"-1234.59", "USD", "en-NL", currency.DisplayNone, "(1.234,59)"},
+		{"-1234.59", "USD", "sr-Latn", currency.DisplayNone, "(1.234,59)"},
 	}
 
 	for _, tt := range tests {
@@ -276,6 +300,7 @@ func TestFormatter_CurrencyDisplay(t *testing.T) {
 			amount, _ := currency.NewAmount(tt.number, tt.currencyCode)
 			locale := currency.NewLocale(tt.localeID)
 			formatter := currency.NewFormatter(locale)
+			formatter.AccountingStyle = true
 			formatter.CurrencyDisplay = tt.currencyDisplay
 			got := formatter.Format(amount)
 			if got != tt.want {
@@ -322,6 +347,7 @@ func TestFormatter_Parse(t *testing.T) {
 		{"-USD\u00a01,234.59", "USD", "en", "-1234.59"},
 		{"-1,234.59", "USD", "en", "-1234.59"},
 		{"-1234.59", "USD", "en", "-1234.59"},
+		{"(1234.59)", "USD", "en", "-1234.59"},
 
 		{"€\u00a01.234,00", "EUR", "de-AT", "1234.00"},
 		{"EUR\u00a01.234,00", "EUR", "de-AT", "1234.00"},
@@ -331,21 +357,21 @@ func TestFormatter_Parse(t *testing.T) {
 		// Arabic digits.
 		{"١٢٬٣٤٥٬٦٧٨٫٩٠\u00a0US$", "USD", "ar", "12345678.90"},
 		// Arabic extended (Persian) digits.
-		{"\u200eUS$۱۲٬۳۴۵٬۶۷۸٫۹۰", "USD", "fa", "12345678.90"},
+		{"\u200e$۱۲٬۳۴۵٬۶۷۸٫۹۰", "USD", "fa", "12345678.90"},
 		// Bengali digits.
 		{"১,২৩,৪৫,৬৭৮.৯০\u00a0US$", "USD", "bn", "12345678.90"},
 		// Devanagari digits.
 		{"US$\u00a0१,२३,४५,६७८.९०", "USD", "ne", "12345678.90"},
 		// Myanmar (Burmese) digits.
 		{"၁၂,၃၄၅,၆၇၈.၉၀\u00a0US$", "USD", "my", "12345678.90"},
-		// Tibetan digits.
-		{"US$༡,༢༣,༤༥,༦༧༨.༩༠", "USD", "dz", "12345678.90"},
 	}
 
 	for _, tt := range tests {
 		t.Run("", func(t *testing.T) {
 			locale := currency.NewLocale(tt.localeID)
 			formatter := currency.NewFormatter(locale)
+			// Allow parsing negative amounts formatted using parenthesis.
+			formatter.AccountingStyle = true
 			got, err := formatter.Parse(tt.s, tt.currencyCode)
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
@@ -357,5 +383,14 @@ func TestFormatter_Parse(t *testing.T) {
 				t.Errorf("got %v, want %v", got.CurrencyCode(), tt.currencyCode)
 			}
 		})
+	}
+}
+
+func TestEmptyLocale(t *testing.T) {
+	locale := currency.NewLocale("")
+	formatter := currency.NewFormatter(locale)
+	got := formatter.Locale().String()
+	if got != "" {
+		t.Errorf("got %v, want empty locale", got)
 	}
 }

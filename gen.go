@@ -1,6 +1,7 @@
 // Copyright (c) 2020 Bojan Zivanovic and contributors
 // SPDX-License-Identifier: MIT
 
+//go:build ignore
 // +build ignore
 
 package main
@@ -9,7 +10,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -44,7 +45,6 @@ const (
 	numBeng
 	numDeva
 	numMymr
-	numTibt
 )
 
 type currencyInfo struct {
@@ -58,7 +58,8 @@ type symbolInfo struct {
 }
 
 type currencyFormat struct {
-	pattern               string
+	standardPattern       string
+	accountingPattern     string
 	numberingSystem       numberingSystem
 	minGroupingDigits     uint8
 	primaryGroupingSize   uint8
@@ -88,6 +89,10 @@ var currencySymbols = map[string][]symbolInfo{
 
 var currencyFormats = map[string]currencyFormat{
 	{{ export .Formats 1 "\t" }}
+}
+
+var countryCurrencies = map[string]string{
+	{{ export .CountryCurrencies 5 "\t" }}
 }
 
 var parentLocales = map[string]string{
@@ -136,11 +141,11 @@ const (
 	numBeng
 	numDeva
 	numMymr
-	numTibt
 )
 
 type currencyFormat struct {
-	pattern               string
+	standardPattern       string
+	accountingPattern     string
 	numberingSystem       numberingSystem
 	minGroupingDigits     uint8
 	primaryGroupingSize   uint8
@@ -152,7 +157,7 @@ type currencyFormat struct {
 }
 
 func (f currencyFormat) GoString() string {
-	return fmt.Sprintf("{%q, %d, %d, %d, %d, %q, %q, %q, %q}", f.pattern, f.numberingSystem, f.minGroupingDigits, f.primaryGroupingSize, f.secondaryGroupingSize, f.decimalSeparator, f.groupingSeparator, f.plusSign, f.minusSign)
+	return fmt.Sprintf("{%q, %q, %d, %d, %d, %d, %q, %q, %q, %q}", f.standardPattern, f.accountingPattern, f.numberingSystem, f.minGroupingDigits, f.primaryGroupingSize, f.secondaryGroupingSize, f.decimalSeparator, f.groupingSeparator, f.plusSign, f.minusSign)
 }
 
 func main() {
@@ -188,6 +193,11 @@ func main() {
 		log.Fatal(err)
 	}
 	formats, err := generateFormats(assetDir)
+	if err != nil {
+		os.RemoveAll(assetDir)
+		log.Fatal(err)
+	}
+	countryCurrencies, err := generateCountryCurrencies(assetDir)
 	if err != nil {
 		os.RemoveAll(assetDir)
 		log.Fatal(err)
@@ -231,21 +241,23 @@ func main() {
 		log.Fatal(err)
 	}
 	t.Execute(f, struct {
-		CLDRVersion     string
-		G10Currencies   []string
-		OtherCurrencies []string
-		CurrencyInfo    map[string]*currencyInfo
-		SymbolInfo      map[string]symbolInfoSlice
-		Formats         map[string]currencyFormat
-		ParentLocales   map[string]string
+		CLDRVersion       string
+		G10Currencies     []string
+		OtherCurrencies   []string
+		CurrencyInfo      map[string]*currencyInfo
+		SymbolInfo        map[string]symbolInfoSlice
+		Formats           map[string]currencyFormat
+		CountryCurrencies map[string]string
+		ParentLocales     map[string]string
 	}{
-		CLDRVersion:     CLDRVersion,
-		G10Currencies:   g10Currencies,
-		OtherCurrencies: otherCurrencies,
-		CurrencyInfo:    currencies,
-		SymbolInfo:      symbols,
-		Formats:         formats,
-		ParentLocales:   parentLocales,
+		CLDRVersion:       CLDRVersion,
+		G10Currencies:     g10Currencies,
+		OtherCurrencies:   otherCurrencies,
+		CurrencyInfo:      currencies,
+		SymbolInfo:        symbols,
+		Formats:           formats,
+		CountryCurrencies: countryCurrencies,
+		ParentLocales:     parentLocales,
 	})
 
 	log.Println("Done.")
@@ -254,23 +266,17 @@ func main() {
 // fetchCLDR fetches the CLDR data from GitHub and returns its version.
 //
 // The JSON version of the data is used because it is more convenient
-// to parse. See https://github.com/unicode-cldr/cldr-json for details.
+// to parse. See https://github.com/unicode-org/cldr-json for details.
 func fetchCLDR(dir string) (string, error) {
-	repos := []string{
-		"https://github.com/unicode-cldr/cldr-core.git",
-		"https://github.com/unicode-cldr/cldr-numbers-full.git",
-	}
-	for _, repo := range repos {
-		cmd := exec.Command("git", "clone", repo)
-		cmd.Dir = dir
-		cmd.Stderr = os.Stderr
-		_, err := cmd.Output()
-		if err != nil {
-			return "", err
-		}
+	repo := "https://github.com/unicode-org/cldr-json.git"
+	cmd := exec.Command("git", "clone", repo, "--depth", "1", dir)
+	cmd.Stderr = os.Stderr
+	_, err := cmd.Output()
+	if err != nil {
+		return "", err
 	}
 
-	data, err := ioutil.ReadFile(dir + "/cldr-core/package.json")
+	data, err := os.ReadFile(dir + "/cldr-json/cldr-core/package.json")
 	if err != nil {
 		return "", fmt.Errorf("fetchCLDR: %w", err)
 	}
@@ -291,7 +297,7 @@ func fetchCLDR(dir string) (string, error) {
 // Furthermore, CLDR includes both active and inactive currencies, while ISO
 // includes only active ones, matching the needs of this package.
 func fetchISO() (map[string]*currencyInfo, error) {
-	data, err := fetchURL("https://www.currency-iso.org/dam/downloads/lists/list_one.xml")
+	data, err := fetchURL("https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml")
 	if err != nil {
 		return nil, fmt.Errorf("fetchISO: %w", err)
 	}
@@ -315,16 +321,12 @@ func fetchISO() (map[string]*currencyInfo, error) {
 
 	currencies := make(map[string]*currencyInfo, 170)
 	for _, entry := range aux.Table[0].Entry {
-		if entry.Code == "" || entry.Name.IsFund {
+		if entry.Code == "" || entry.Number == "" || entry.Digits == "N.A." {
 			continue
 		}
-		if entry.Code == "XUA" || entry.Code == "XSU" || entry.Code == "XDR" {
-			continue
-		}
-		if strings.HasPrefix(entry.Country, "ZZ") {
-			// Special currency (Gold, Platinum, etc).
-			continue
-		}
+
+		// We use ISO digits here with a fallback to 2, but prefer CLDR
+		// data when available. See replaceDigits() for the next step.
 		digits := parseDigits(entry.Digits, 2)
 		currencies[entry.Code] = &currencyInfo{entry.Number, digits}
 	}
@@ -342,7 +344,7 @@ func fetchURL(url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fetchURL: Get %q: %v", url, resp.Status)
 	}
-	data, err := ioutil.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("fetchURL: Get %q: %w", url, err)
 	}
@@ -350,12 +352,15 @@ func fetchURL(url string) ([]byte, error) {
 	return data, nil
 }
 
-// replaceDigits replaces each currency's digits with data from CLDR.
+// replaceDigits replaces currency digits with data from CLDR.
 //
 // CLDR data reflects real life usage more closely, specifying 0 digits
 // (instead of 2 in ISO data) for ~14 currencies, such as ALL and RSD.
+//
+// Note that CLDR does not have data for every currency, in which ase
+// the original ISO digits are kept.
 func replaceDigits(currencies map[string]*currencyInfo, dir string) error {
-	data, err := ioutil.ReadFile(dir + "/cldr-core/supplemental/currencyData.json")
+	data, err := os.ReadFile(dir + "/cldr-json/cldr-core/supplemental/currencyData.json")
 	if err != nil {
 		return fmt.Errorf("replaceDigits: %w", err)
 	}
@@ -380,12 +385,64 @@ func replaceDigits(currencies map[string]*currencyInfo, dir string) error {
 	return nil
 }
 
+// generateCountryCurrencies generates the map of country codes to currency codes.
+func generateCountryCurrencies(dir string) (map[string]string, error) {
+	data, err := os.ReadFile(dir + "/cldr-json/cldr-core/supplemental/currencyData.json")
+	if err != nil {
+		return nil, fmt.Errorf("generateCountryCurrencies: %w", err)
+	}
+
+	aux := struct {
+		Supplemental struct {
+			CurrencyData struct {
+				Region map[string][]map[string]struct {
+					From   string `json:"_from"`
+					To     string `json:"_to"`
+					Tender string `json:"_tender"`
+				}
+			}
+		}
+	}{}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return nil, fmt.Errorf("generateCountryCurrencies: %w", err)
+	}
+
+	countryCurrencies := make(map[string]string)
+	for countryCode, currencies := range aux.Supplemental.CurrencyData.Region {
+		if contains([]string{"EA", "EU", "ZZ"}, countryCode) {
+			// EA, EU and ZZ are not countries.
+			continue
+		}
+
+		lastCurrencyCode := ""
+		lastFrom := ""
+		for _, currencyUsage := range currencies {
+			for currencyCode, usageInfo := range currencyUsage {
+				if usageInfo.To != "" || usageInfo.Tender == "false" {
+					// Currency no longer in use, skip.
+					continue
+				}
+				if lastFrom == "" || usageInfo.From > lastFrom {
+					lastCurrencyCode = currencyCode
+					lastFrom = usageInfo.From
+				}
+			}
+		}
+
+		if lastCurrencyCode != "" && lastCurrencyCode != "XXX" {
+			countryCurrencies[countryCode] = lastCurrencyCode
+		}
+	}
+
+	return countryCurrencies, nil
+}
+
 // generateSymbols generates currency symbols for all locales.
 //
 // Symbols are grouped by locale, and deduplicated by parent.
 func generateSymbols(currencies map[string]*currencyInfo, dir string) (map[string]symbolInfoSlice, error) {
 	symbols := make(map[string]map[string][]string)
-	files, err := ioutil.ReadDir(dir + "/cldr-numbers-full/main")
+	files, err := os.ReadDir(dir + "/cldr-json/cldr-numbers-modern/main")
 	if err != nil {
 		return nil, fmt.Errorf("generateSymbols: %w", err)
 	}
@@ -497,8 +554,8 @@ func generateSymbols(currencies map[string]*currencyInfo, dir string) (map[strin
 //
 // Discards symbols belonging to inactive currencies.
 func readSymbols(currencies map[string]*currencyInfo, dir string, locale string) (map[string]string, error) {
-	filename := fmt.Sprintf("%v/cldr-numbers-full/main/%v/currencies.json", dir, locale)
-	data, err := ioutil.ReadFile(filename)
+	filename := fmt.Sprintf("%v/cldr-json/cldr-numbers-modern/main/%v/currencies.json", dir, locale)
+	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("readSymbols: %w", err)
 	}
@@ -519,6 +576,10 @@ func readSymbols(currencies map[string]*currencyInfo, dir string, locale string)
 	for currencyCode, data := range aux.Main[locale].Numbers.Currencies {
 		if _, ok := currencies[currencyCode]; ok {
 			symbols[currencyCode] = data["symbol"]
+			// CLDR omits the symbol when it matches the currency code.
+			if symbols[currencyCode] == "" {
+				symbols[currencyCode] = currencyCode
+			}
 		}
 	}
 
@@ -530,7 +591,7 @@ func readSymbols(currencies map[string]*currencyInfo, dir string, locale string)
 // Formats are deduplicated by parent.
 func generateFormats(dir string) (map[string]currencyFormat, error) {
 	formats := make(map[string]currencyFormat)
-	files, err := ioutil.ReadDir(dir + "/cldr-numbers-full/main")
+	files, err := os.ReadDir(dir + "/cldr-json/cldr-numbers-modern/main")
 	if err != nil {
 		return nil, fmt.Errorf("generateFormats: %w", err)
 	}
@@ -564,14 +625,15 @@ func generateFormats(dir string) (map[string]currencyFormat, error) {
 
 // readFormat reads the given locale's currency format from CLDR data.
 func readFormat(dir string, locale string) (currencyFormat, error) {
-	filename := fmt.Sprintf("%v/cldr-numbers-full/main/%v/numbers.json", dir, locale)
-	data, err := ioutil.ReadFile(filename)
+	filename := fmt.Sprintf("%v/cldr-json/cldr-numbers-modern/main/%v/numbers.json", dir, locale)
+	data, err := os.ReadFile(filename)
 	if err != nil {
 		return currencyFormat{}, fmt.Errorf("readFormat: %w", err)
 	}
 
 	type cldrPattern struct {
-		Standard string
+		Standard   string
+		Accounting string
 	}
 	type cldrData struct {
 		Numbers struct {
@@ -583,14 +645,12 @@ func readFormat(dir string, locale string) (currencyFormat, error) {
 			PatternBeng            cldrPattern       `json:"currencyFormats-numberSystem-beng"`
 			PatternDeva            cldrPattern       `json:"currencyFormats-numberSystem-deva"`
 			PatternMymr            cldrPattern       `json:"currencyFormats-numberSystem-mymr"`
-			PatternTibt            cldrPattern       `json:"currencyFormats-numberSystem-tibt"`
 			SymbolsLatn            map[string]string `json:"symbols-numberSystem-latn"`
 			SymbolsArab            map[string]string `json:"symbols-numberSystem-arab"`
 			SymbolsArabExt         map[string]string `json:"symbols-numberSystem-arabext"`
 			SymbolsBeng            map[string]string `json:"symbols-numberSystem-beng"`
 			SymbolsDeva            map[string]string `json:"symbols-numberSystem-deva"`
 			SymbolsMymr            map[string]string `json:"symbols-numberSystem-mymr"`
-			SymbolsTibt            map[string]string `json:"symbols-numberSystem-tibt"`
 		}
 	}
 	aux := struct {
@@ -601,44 +661,47 @@ func readFormat(dir string, locale string) (currencyFormat, error) {
 	}
 
 	var numSystem numberingSystem
-	var pattern string
+	var standardPattern string
+	var accountingPattern string
 	var symbols map[string]string
 	extFormat := aux.Main[locale].Numbers
 	switch extFormat.DefaultNumberingSystem {
 	case "latn":
 		numSystem = numLatn
-		pattern = extFormat.PatternLatn.Standard
+		standardPattern = extFormat.PatternLatn.Standard
+		accountingPattern = extFormat.PatternLatn.Accounting
 		symbols = extFormat.SymbolsLatn
 	case "arab":
 		numSystem = numArab
-		pattern = extFormat.PatternArab.Standard
+		standardPattern = extFormat.PatternArab.Standard
+		accountingPattern = extFormat.PatternArab.Accounting
 		symbols = extFormat.SymbolsArab
 	case "arabext":
 		numSystem = numArabExt
-		pattern = extFormat.PatternArabExt.Standard
+		standardPattern = extFormat.PatternArabExt.Standard
+		accountingPattern = extFormat.PatternArabExt.Accounting
 		symbols = extFormat.SymbolsArabExt
 	case "beng":
 		numSystem = numBeng
-		pattern = extFormat.PatternBeng.Standard
+		standardPattern = extFormat.PatternBeng.Standard
+		accountingPattern = extFormat.PatternBeng.Accounting
 		symbols = extFormat.SymbolsBeng
 	case "deva":
 		numSystem = numDeva
-		pattern = extFormat.PatternDeva.Standard
+		standardPattern = extFormat.PatternDeva.Standard
+		accountingPattern = extFormat.PatternDeva.Accounting
 		symbols = extFormat.SymbolsDeva
 	case "mymr":
 		numSystem = numMymr
-		pattern = extFormat.PatternMymr.Standard
+		standardPattern = extFormat.PatternMymr.Standard
+		accountingPattern = extFormat.PatternMymr.Accounting
 		symbols = extFormat.SymbolsMymr
-	case "tibt":
-		numSystem = numTibt
-		pattern = extFormat.PatternTibt.Standard
-		symbols = extFormat.SymbolsTibt
 	default:
 		return currencyFormat{}, fmt.Errorf("readFormat: unknown numbering system %q in locale %q", extFormat.DefaultNumberingSystem, locale)
 	}
 	primaryGroupingSize := 0
 	secondaryGroupingSize := 0
-	patternParts := strings.Split(pattern, ";")
+	patternParts := strings.Split(standardPattern, ";")
 	if strings.Contains(patternParts[0], ",") {
 		r, _ := regexp.Compile("#+0")
 		primaryGroup := r.FindString(patternParts[0])
@@ -649,10 +712,14 @@ func readFormat(dir string, locale string) (currencyFormat, error) {
 			// This pattern has a distinct secondary group size.
 			secondaryGroupingSize = len(numberGroups[1])
 		}
-		// Strip the grouping info from the pattern, now that it is
-		// available separately.
-		pattern = strings.ReplaceAll(pattern, "#,##,##", "")
-		pattern = strings.ReplaceAll(pattern, "#,##", "")
+	}
+	// Strip the grouping info from the patterns, now that it is available separately.
+	standardPattern = processPattern(standardPattern)
+	accountingPattern = processPattern(accountingPattern)
+	// To save memory, the accounting pattern is stored
+	// only if it's different from the standard pattern.
+	if accountingPattern == standardPattern {
+		accountingPattern = ""
 	}
 	decimalSeparator := symbols["decimal"]
 	groupingSeparator := symbols["group"]
@@ -666,7 +733,8 @@ func readFormat(dir string, locale string) (currencyFormat, error) {
 	}
 
 	format := currencyFormat{}
-	format.pattern = pattern
+	format.standardPattern = standardPattern
+	format.accountingPattern = accountingPattern
 	format.numberingSystem = numSystem
 	format.minGroupingDigits = parseDigits(extFormat.MinimumGroupingDigits, 1)
 	format.primaryGroupingSize = uint8(primaryGroupingSize)
@@ -679,12 +747,21 @@ func readFormat(dir string, locale string) (currencyFormat, error) {
 	return format, nil
 }
 
+// processPattern processes the pattern.
+func processPattern(pattern string) string {
+	// Strip the grouping info.
+	pattern = strings.ReplaceAll(pattern, "#,##,##", "")
+	pattern = strings.ReplaceAll(pattern, "#,##", "")
+
+	return pattern
+}
+
 // generateParentLocales generates parent locales from CLDR data.
 //
 // Ensures ignored locales are skipped.
-// Replaces "root" with "en", since this package treats them as equivalent.
+// Replaces "und" with "en", since this package treats them as equivalent.
 func generateParentLocales(dir string) (map[string]string, error) {
-	data, err := ioutil.ReadFile(dir + "/cldr-core/supplemental/parentLocales.json")
+	data, err := os.ReadFile(dir + "/cldr-json/cldr-core/supplemental/parentLocales.json")
 	if err != nil {
 		return nil, fmt.Errorf("generateParentLocales: %w", err)
 	}
@@ -701,8 +778,8 @@ func generateParentLocales(dir string) (map[string]string, error) {
 
 	parentLocales := make(map[string]string)
 	for locale, parent := range aux.Supplemental.ParentLocales.ParentLocale {
-		// Avoid exposing the concept of "root" to users.
-		if parent == "root" {
+		// Avoid exposing the concept of "und" to users.
+		if parent == "und" {
 			parent = "en"
 		}
 		if !shouldIgnoreLocale(locale) {
@@ -718,32 +795,19 @@ func generateParentLocales(dir string) (map[string]string, error) {
 
 func shouldIgnoreLocale(locale string) bool {
 	ignoredLocales := []string{
+		// English is our fallback, we don't need another.
+		"und",
 		// Esperanto, Interlingua, Volapuk are made up languages.
 		"eo", "ia", "vo",
-		// Church Slavic, Manx, Prussian are historical languages.
-		"cu", "gv", "prg",
+		// Belarus (Classical orthography), Church Slavic, Manx, Prussian are historical.
+		"be-tarask", "cu", "gv", "prg",
 		// Valencian differs from its parent only by a single character (è/é).
-		"ca-ES-VALENCIA",
+		"ca-ES-valencia",
 		// Africa secondary languages.
-		"agq", "ak", "am", "asa", "bas", "bem", "bez", "bm", "cgg", "dav",
-		"dje", "dua", "dyo", "ebu", "ee", "ewo", "ff", "ff-Latn", "guz",
-		"ha", "ig", "jgo", "jmc", "kab", "kam", "kea", "kde", "ki", "kkj",
-		"kln", "khq", "ksb", "ksf", "lag", "luo", "luy", "lu", "lg", "ln",
-		"mas", "mer", "mua", "mgo", "mgh", "mfe", "naq", "nd", "nmg", "nnh",
-		"nus", "nyn", "om", "pcm", "rof", "rwk", "saq", "seh", "ses", "sbp",
-		"sg", "shi", "sn", "teo", "ti", "tzm", "twq", "vai", "vai-Latn", "vun",
-		"wo", "xog", "xh", "zgh", "yav", "yo", "zu",
-		// Europe secondary languages.
-		"br", "dsb", "fo", "fur", "fy", "hsb", "ksh", "kw", "nds", "or",
-		"rm", "se", "smn", "wae",
-		// India secondary languages.
-		"as", "brx", "gu", "kok", "ks", "mai", "ml", "mni", "mr", "sat",
-		"sd", "te",
-		// Other infrequently used locales.
-		"ceb", "ccp", "chr", "ckb", "haw", "ii", "jv", "kl", "kn", "lkt",
-		"lrc", "mi", "mzn", "os", "qu", "row", "sah", "su", "tt", "ug", "yi",
-		// Special "grouping" locales.
-		"root", "en-US-POSIX",
+		// Not present in "modern" data, just listed in parentLocales.
+		"bm", "byn", "dje", "dyo", "ff", "ha", "shi", "vai", "wo", "yo",
+		// Infrequently used locales.
+		"jv", "kn", "ml", "row", "sat", "sd", "to",
 	}
 	localeParts := strings.Split(locale, "-")
 	ignore := false

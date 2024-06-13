@@ -5,6 +5,7 @@ package currency_test
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/plenigo/currency"
 )
@@ -19,13 +20,27 @@ func ExampleNewAmount() {
 	// USD
 }
 
-func ExampleAmount_ToMinorUnits() {
-	firstAmount, _ := currency.NewAmount("20.99", "USD")
+func ExampleNewAmountFromInt64() {
+	firstAmount, _ := currency.NewAmountFromInt64(2449, "USD")
+	secondAmount, _ := currency.NewAmountFromInt64(5000, "USD")
+	thirdAmount, _ := currency.NewAmountFromInt64(60, "JPY")
+	fmt.Println(firstAmount)
+	fmt.Println(secondAmount)
+	fmt.Println(thirdAmount)
+	// Output: 24.49 USD
+	// 50.00 USD
+	// 60 JPY
+}
+
+func ExampleAmount_Int64() {
+	firstAmount, _ := currency.NewAmount("24.49", "USD")
 	secondAmount, _ := currency.NewAmount("50", "USD")
-	fmt.Println(firstAmount.ToMinorUnits())
-	fmt.Println(secondAmount.ToMinorUnits())
-	// Output: 2099
-	// 5000
+	thirdAmount, _ := currency.NewAmount("60", "JPY")
+	firstInt, _ := firstAmount.Int64()
+	secondInt, _ := secondAmount.Int64()
+	thirdInt, _ := thirdAmount.Int64()
+	fmt.Println(firstInt, secondInt, thirdInt)
+	// Output: 2449 5000 60
 }
 
 func ExampleAmount_Convert() {
@@ -45,12 +60,36 @@ func ExampleAmount_Add() {
 	// Output: 24.49 USD
 }
 
+func ExampleAmount_Add_sum() {
+	// Any currency.Amount can be added to the zero value.
+	var sum currency.Amount
+	for i := 0; i <= 4; i++ {
+		a, _ := currency.NewAmount(strconv.Itoa(i), "AUD")
+		sum, _ = sum.Add(a)
+	}
+
+	fmt.Println(sum) // 0 + 1 + 2 + 3 + 4 = 10
+	// Output: 10 AUD
+}
+
 func ExampleAmount_Sub() {
 	baseAmount, _ := currency.NewAmount("20.99", "USD")
 	discountAmount, _ := currency.NewAmount("5.00", "USD")
 	amount, _ := baseAmount.Sub(discountAmount)
 	fmt.Println(amount)
 	// Output: 15.99 USD
+}
+
+func ExampleAmount_Sub_diff() {
+	// Any currency.Amount can be subtracted from the zero value.
+	var diff currency.Amount
+	for i := 0; i <= 4; i++ {
+		a, _ := currency.NewAmount(strconv.Itoa(i), "AUD")
+		diff, _ = diff.Sub(a)
+	}
+
+	fmt.Println(diff) // 0 - 1 - 2 - 3 - 4 = -10
+	// Output: -10 AUD
 }
 
 func ExampleAmount_Mul() {
@@ -93,12 +132,12 @@ func ExampleAmount_RoundTo() {
 func ExampleNewLocale() {
 	firstLocale := currency.NewLocale("en-US")
 	fmt.Println(firstLocale)
-	fmt.Println(firstLocale.Language, firstLocale.Region)
+	fmt.Println(firstLocale.Language, firstLocale.Territory)
 
 	// Locale IDs are normalized.
 	secondLocale := currency.NewLocale("sr_rs_latn")
 	fmt.Println(secondLocale)
-	fmt.Println(secondLocale.Language, secondLocale.Script, secondLocale.Region)
+	fmt.Println(secondLocale.Language, secondLocale.Script, secondLocale.Territory)
 	// Output: en-US
 	// en US
 	// sr-Latn-RS
@@ -160,6 +199,21 @@ func ExampleFormatter_Parse() {
 	// Output: 1234.59 EUR
 	// 1234.59 EUR
 	// 1234.59 EUR
+}
+
+func ExampleForCountryCode() {
+	currencyCode, ok := currency.ForCountryCode("US")
+	fmt.Println(currencyCode, ok)
+
+	currencyCode, ok = currency.ForCountryCode("FR")
+	fmt.Println(currencyCode, ok)
+
+	// Non-existent country code.
+	_, ok = currency.ForCountryCode("XX")
+	fmt.Println(ok)
+	// Output: USD true
+	// EUR true
+	// false
 }
 
 func ExampleGetNumericCode() {

@@ -28,19 +28,22 @@ var localDigits = map[numberingSystem]string{
 	numBeng:    "০১২৩৪৫৬৭৮৯",
 	numDeva:    "०१२३४५६७८९",
 	numMymr:    "၀၁၂၃၄၅၆၇၈၉",
-	numTibt:    "༠༡༢༣༤༥༦༧༨༩",
 }
 
 // Formatter formats and parses currency amounts.
 type Formatter struct {
 	locale Locale
 	format currencyFormat
-	// NoGrouping turns off grouping of major digits.
+	// AccountingStyle formats the amount using the accounting style.
+	// For example, "-3.00 USD" in the "en" locale is formatted as "($3.00)" instead of "-$3.00".
 	// Defaults to false.
-	NoGrouping bool
+	AccountingStyle bool
 	// AddPlusSign inserts the plus sign in front of positive amounts.
 	// Defaults to false.
 	AddPlusSign bool
+	// NoGrouping turns off grouping of major digits.
+	// Defaults to false.
+	NoGrouping bool
 	// MinDigits specifies the minimum number of fraction digits.
 	// All zeroes past the minimum will be removed (0 => no trailing zeroes).
 	// Defaults to currency.DefaultDigits (e.g. 2 for USD, 0 for RSD).
@@ -50,12 +53,10 @@ type Formatter struct {
 	// Defaults to 6, so that most amounts are shown as-is (without rounding).
 	MaxDigits uint8
 	// RoundingMode specifies how the formatted amount will be rounded.
-	// One of the currency.Round* constants.
 	// Defaults to currency.RoundHalfUp.
 	RoundingMode RoundingMode
-	// CurrencyDisplay specifies how the currency will be displayed.
-	// One of the currency.Display* constants.
-	// Defaults to curency.DisplaySymbol.
+	// CurrencyDisplay specifies how the currency will be displayed (symbol/code/none).
+	// Defaults to currency.DisplaySymbol.
 	CurrencyDisplay Display
 	// SymbolMap specifies custom symbols for individual currency codes.
 	// For example, "USD": "$" means that the $ symbol will be used even if
@@ -65,32 +66,15 @@ type Formatter struct {
 
 // NewFormatter creates a new formatter for the given locale.
 func NewFormatter(locale Locale) *Formatter {
-	f := &Formatter{}
-	for {
-		// CLDR considers "en" and "en-US" to be equivalent.
-		// Fall back immediately for better performance
-		enUSLocale := Locale{Language: "en", Region: "US"}
-		if locale == enUSLocale {
-			locale = Locale{Language: "en"}
-		}
-		localeID := locale.String()
-		format, ok := currencyFormats[localeID]
-		if ok {
-			f.format = format
-			break
-		}
-		locale = locale.GetParent()
-		if locale.IsEmpty() {
-			break
-		}
+	f := &Formatter{
+		locale:          locale,
+		format:          getFormat(locale),
+		MinDigits:       DefaultDigits,
+		MaxDigits:       6,
+		RoundingMode:    RoundHalfUp,
+		CurrencyDisplay: DisplaySymbol,
+		SymbolMap:       make(map[string]string),
 	}
-	f.locale = locale
-	f.MinDigits = DefaultDigits
-	f.MaxDigits = 6
-	f.RoundingMode = RoundHalfUp
-	f.CurrencyDisplay = DisplaySymbol
-	f.SymbolMap = make(map[string]string)
-
 	return f
 }
 
@@ -126,19 +110,19 @@ func (f *Formatter) Format(amount Amount) string {
 
 	replacements := []string{
 		"0.00", formattedNumber,
-		"¤", formattedCurrency,
 		"+", f.format.plusSign,
 		"-", f.format.minusSign,
 	}
-	r := strings.NewReplacer(replacements...)
-	formattedAmount := r.Replace(pattern)
 	if formattedCurrency == "" {
 		// Many patterns have a non-breaking space between
 		// the number and currency, not needed in this case.
-		formattedAmount = strings.TrimSpace(formattedAmount)
+		replacements = append(replacements, "\u00a0¤", "", "¤\u00a0", "", "¤", "")
+	} else {
+		replacements = append(replacements, "¤", formattedCurrency)
 	}
+	r := strings.NewReplacer(replacements...)
 
-	return formattedAmount
+	return r.Replace(pattern)
 }
 
 // Parse parses a formatted amount.
@@ -162,6 +146,9 @@ func (f *Formatter) Parse(s, currencyCode string) (Amount, error) {
 			replacements = append(replacements, v, strconv.Itoa(i))
 		}
 	}
+	if f.AccountingStyle {
+		replacements = append(replacements, "(", "-", ")", "")
+	}
 	r := strings.NewReplacer(replacements...)
 	n := r.Replace(s)
 
@@ -170,19 +157,32 @@ func (f *Formatter) Parse(s, currencyCode string) (Amount, error) {
 
 // getPattern returns a positive or negative pattern for a currency amount.
 func (f *Formatter) getPattern(amount Amount) string {
-	patterns := strings.Split(f.format.pattern, ";")
-	if amount.IsNegative() {
+	var patterns []string
+	if f.usesAccountingPattern() {
+		patterns = strings.Split(f.format.accountingPattern, ";")
+	} else {
+		patterns = strings.Split(f.format.standardPattern, ";")
+	}
+
+	switch {
+	case amount.IsNegative():
 		if len(patterns) == 1 {
 			return "-" + patterns[0]
 		}
 		return patterns[1]
-	} else if f.AddPlusSign {
-		if len(patterns) == 1 {
+	case f.AddPlusSign:
+		if len(patterns) == 1 || f.usesAccountingPattern() {
 			return "+" + patterns[0]
 		}
 		return strings.Replace(patterns[1], "-", "+", 1)
+	default:
+		return patterns[0]
 	}
-	return patterns[0]
+}
+
+// usesAccountingPattern returns whether the formatter needs to use the accounting pattern.
+func (f *Formatter) usesAccountingPattern() bool {
+	return f.AccountingStyle && f.format.accountingPattern != ""
 }
 
 // formatNumber formats the number for display.
